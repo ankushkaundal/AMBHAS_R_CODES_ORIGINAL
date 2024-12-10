@@ -1,0 +1,20 @@
+
+
+update_vertically <- function(h,sy,net_recharge,
+                              pd, hmin){
+  h <- h + net_recharge/sy
+  
+  vv <-(1-pd)
+  hh <- (h-hmin)
+  
+  # cat('\n vv hh',vv, hh)
+  
+  discharge <- sy*(1-pd)*(h-hmin)
+  
+  discharge[discharge<0] <- 0
+  
+  h <- h - discharge/sy
+  
+  return(list(h=h,BF= discharge))
+}
+
