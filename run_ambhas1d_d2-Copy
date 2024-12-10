@@ -1,0 +1,210 @@
+
+
+#**************************************************
+## Case 4 : Constant Recharge and zero Pumping
+## Optimize : rf (variable), pd  Sy, pumping (variable)
+#**************************************************
+
+remove(list = ls())
+
+# Load the required libraries
+library(openxlsx)
+library(optimx)
+library(zoo)
+library(Metrics)
+library(rsq)
+library(hydroGOF)
+
+# path of the source code folder 
+dir.src <- "D:/Tut_MS/Tut_2_MS/ambhas_1d"
+setwd(dir.src)
+
+dir.input <- "D:/Tut_MS/Tut_2_MS/ambhas_1d"
+
+## Load the model
+source("D:/Tut_MS/Tut_2_MS/ambhas_1d/10_gw_util.R")
+source("D:/Tut_MS/Tut_2_MS/ambhas_1d/20_gw_main.R")
+
+
+###***[USER INPUT] Please set the input (a) initial (b)lower and upper bounds of parameters accordingly ***###
+# Read the input data from the excel workbook
+in.fileNames <- basename(Sys.glob("D:/Tut_MS/Tut_2_MS/ambhas_1d/loc_*.xlsx"))
+
+r2_grid<-matrix(NA,length(in.fileNames),2)
+rmse_grid <-matrix(NA,length(in.fileNames),2)
+nse_grid <-matrix(NA,length(in.fileNames),2) # NSE Coefficient
+d_grid <-matrix(NA,length(in.fileNames),2) # Index of Agreement
+sy_grid <-matrix(NA,length(in.fileNames),2)
+gof_grid <- matrix(NA,length(in.fileNames)+1,6)
+gof_grid[1,1] <- ('Grid')
+gof_grid[1,2] <- ('R2')
+gof_grid[1,3] <- ('RMSE')
+gof_grid[1,4] <- ('NSE')
+gof_grid[1,5] <- ('d')
+gof_grid[1,6] <- ('sy')
+
+i=0 # For rmse and r2 arrays
+
+for(in.fileName in in.fileNames){
+  i=i+1
+  print(i)
+  wb <- openxlsx::loadWorkbook(file.path(dir.input,in.fileName))
+  all.sheet.names <- getSheetNames(file.path(dir.input,in.fileName))
+  indx.names.input <- grep("input",all.sheet.names)
+  district.codes <- sapply(strsplit(all.sheet.names[indx.names.input],"input_"), `[`, 2)
+  
+  for (code in district.codes){
+    
+    in.sheetname.1 <- paste0("input","_",code)
+    data <- readWorkbook(wb, sheet = in.sheetname.1,detectDates = TRUE)
+    data$Date <- as.Date(data$Date,"%Y-%m-%d") 
+    in.sheetname.2 <- paste0("par","_",code) 
+    par <- readWorkbook(wb, sheet = in.sheetname.2)
+    ele <<- as.numeric(par$Value[par$Parameter == "ele"])
+    rf <-  as.numeric(par$Value[par$Parameter == "rf"])
+    sy <-  as.numeric(par$Value[par$Parameter == "sy"])
+    hmin <<-  as.numeric(par$Value[par$Parameter == "hmin"])
+    pd <<-  as.numeric(par$Value[par$Parameter == "pd"])
+    Dnet <<-  as.numeric(par$Value[par$Parameter == "Dnet"])   #############3i added
+    
+    ###***[USER INPUT] Please set the input (a) initial (b)lower and upper bounds of parameters accordingly ***###
+    ##(a) Initial guess of parameters
+    n.years <- length(unique(format(data$Date,"%Y")))
+    # Use the value read from the worksheet to create par.ini
+    par.ini <- list(rep(rf, n.years), pd, sy, rep(Dnet, n.years))  ##### i added
+    # par.ini <- list(rep(rf,n.years),pd,sy,rep(0.0001,n.years))
+    names(par.ini) <- list('rf','pd','sy','Dnet')
+    names(par.ini) <- names(par.ini)
+    sy.min <- 0.02
+    sy.max <- 0.02
+    pd.min <- 0.98
+    pd.max <- 0.98
+    # rf.min <- 0.00
+    # rf.max <- 0.15
+    # draft.lower.bound.month.in.metres <- 0.0001
+    # draft.upper.bound.month.in.metres <- 0.0001
+    rf.min <- 0.08
+    rf.max <- 0.11
+    # draft.lower.bound.month.in.metres <- 0.0001   #i commented
+    # draft.upper.bound.month.in.metres <- 0.014    #i commented
+  
+    # Calculate lower and upper bounds as ±20% of Dnet ## in ambhas imd +- 40 were used for the paper
+    lower_bound <- Dnet * 0.60    # i added
+    upper_bound <- Dnet * 1.9   # i added
+    
+    # Set lower and upper bounds for the draft value
+    draft.lower.bound.month.in.metres <- lower_bound   # i added
+    draft.upper.bound.month.in.metres <- upper_bound   # i added
+    
+    ##(b) Lower bounds
+    par.limit.low <- list(rep(rf.min,n.years),pd.min,sy.min,rep(draft.lower.bound.month.in.metres,n.years))
+    names(par.limit.low) <- names(par.ini)
+    
+    ##(c) Upper bounds
+    par.limit.up <- list(rep(rf.max,n.years),pd.max,sy.max,rep(draft.upper.bound.month.in.metres,n.years))
+    names(par.limit.up) <- names(par.ini)
+    
+    #Run the model
+    par.optim <- run_gw_1d(data,par,par.ini,par.limit.low,par.limit.up)
+    
+    ### Mean gwl of the previous period
+    mean.gwl.prev.prd <- mean(out.sim$obs,na.rm=TRUE)
+    
+    sy.prev.prd <- par.optim$sy
+
+    o.sheetname.1 <- paste0("output","_",code)
+    o.sheetname.2 <- paste0("optim_par","_",code)
+    
+    ## Check if sheet exists before adding sheets
+    is.sheet.exist.1 <- grepl(o.sheetname.1, getSheetNames(file.path(dir.input,in.fileName)))
+
+    if (sum(is.sheet.exist.1) != 0){
+      removeTable(wb = wb, sheet = o.sheetname.1,table = getTables(wb,o.sheetname.1)[1])
+      removeTable(wb = wb, sheet = o.sheetname.1,table = getTables(wb,o.sheetname.1)[1])
+    }else{
+      addWorksheet(wb = wb, sheetName = o.sheetname.1, gridLines = TRUE)
+    }
+
+    is.sheet.exist.2 <- grepl(o.sheetname.2, getSheetNames(file.path(dir.input,in.fileName)))
+
+    if (sum(is.sheet.exist.2) != 0){
+      removeTable(wb = wb, sheet = o.sheetname.2,table = getTables(wb,o.sheetname.2))
+    }else{
+      addWorksheet(wb = wb, sheetName = o.sheetname.2, gridLines = TRUE)
+    }
+    par.df <- as.data.frame(t(par.optim))
+    colnames(par.df) = c("val")
+    library(data.table)
+    par.df <- setDT(par.df, keep.rownames = TRUE)[]
+    colnames(par.df) = c("par", "val")
+    dt.out.sim <- cbind(date = format(data$Date,"%Y-%m-%d"),out.sim)
+    idx.Dnet <- grep("Dnet", names(par.optim))
+    pumping.annual <- par.optim[idx.Dnet]*1000*12
+    z <- zoo(x=data.frame(rainfall = data$rainfall,recharge = out.sim$recharge,discharge = out.sim$discharge),order.by = data$Date)
+    out.budget.annual <- rollapply(z,12,sum,by=12)
+    out.budget.annual <- data.frame(year(index(out.budget.annual)),out.budget.annual,AnnualPumping = as.numeric(pumping.annual))
+    colnames(out.budget.annual) <- c("Year","AnnualRainfall","AnnualRecharge","AnnualDischarge","AnnualPumping")
+    out.budget.annual$AnnualRecharge <- out.budget.annual$AnnualRecharge *1000
+    out.budget.annual$AnnualDischarge <- out.budget.annual$AnnualDischarge * 1000
+    writeDataTable(wb, sheet=o.sheetname.1, x = dt.out.sim, startCol = 1,startRow = 1, colNames = TRUE,withFilter=FALSE)
+    writeDataTable(wb, sheet=o.sheetname.1, x = out.budget.annual, startRow = 1, startCol = 8, colNames = TRUE,withFilter=FALSE)
+    writeDataTable(wb, sheet=o.sheetname.2, x = par.df, startRow = 1, startCol = 1, colNames = TRUE,withFilter=FALSE)
+    
+    library(ggplot2)
+    ## Insert currently displayed plot to sheet 1, row 1, column 1
+    y.range <- range(range(out.sim$obs,na.rm=TRUE),range(out.sim$sim,na.rm=TRUE))
+    dt.out.sim$date <- as.Date(dt.out.sim$date)
+    dt.out.obs.new <- data.frame(date = dt.out.sim$date, obs = dt.out.sim$obs)
+    dt.out.obs.new <- dt.out.obs.new[complete.cases(dt.out.obs.new),]
+    out.rmse <- rmse(dt.out.sim$obs, dt.out.sim$sim, na.rm = TRUE) # iadded
+    out.r2 <- cor(dt.out.sim$obs, dt.out.sim$sim, use = "complete.obs")^2
+    out.nse <- NSE(out.sim$obs,out.sim$sim)
+    out.d <- d(out.sim$obs,out.sim$sim)
+    gof_grid[i+1,1] <- district.codes
+    gof_grid[i+1,2] <- out.r2
+    gof_grid[i+1,3] <- out.rmse
+    gof_grid[i+1,4] <- out.nse
+    gof_grid[i+1,5] <- out.d
+    gof_grid[i+1,6] <- par.optim$sy
+    
+    text.rmse<-paste("RMSE = ",round(out.rmse, digits = 2))
+    text.r2<-paste("RSq.= ",round(out.r2, digits = 2))
+    p1 = ggplot() +
+      geom_line(data = dt.out.obs.new, aes(x = date, y = obs,group=1,color = "Observed"),size=0.5) +
+      geom_line(data = dt.out.sim, aes(x = date, y = sim,group=2,color = "Simulated")) +
+      
+      scale_colour_manual(name="",
+                          values=c(Observed="red", Simulated="blue")) +
+      ggtitle(paste0(code,"\n",text.rmse," ",text.r2))+
+      xlab('Date') +
+      ylab('Depth to groundwater (m bgl)') +
+      scale_y_continuous(trans = "reverse",limits = c(y.range[2],0))  +
+      scale_x_date(date_breaks = "12 months" , date_labels = "%b-%y") +
+      theme_bw() +
+      guides(color = guide_legend(nrow = 1)) +
+      theme(plot.title = element_text(hjust = 0.5,size = 12, face = "plain"),legend.title=element_text(size=10),legend.text=element_text(size=12),axis.text=element_text(size=12),
+            legend.position = "bottom",axis.title=element_text(size=12,face="plain"),axis.text.x = element_text(angle = 90, vjust = 0.3)) +
+      theme(plot.margin = unit(c(0,0,0,0), "in"))
+    
+    plot.name<-paste0(dir.input,"/",code,".png")
+    ggsave(plot.name,width = 30,height = 15,units = c("cm"))
+
+    ################################################################
+    in.sheetname.3 <- paste0("outout","_",code)
+    in.sheetname.4 <- paste0("optim_par","_",code)
+    
+    param <- readWorkbook(wb, sheet = in.sheetname.4)
+    param.rf <-  as.numeric(param$val[1:length(pumping.annual)])
+    param.sy <<-  as.numeric(param$val[length(pumping.annual)+2])
+    param.pd <<-  as.numeric(param$val[length(pumping.annual)+1])
+    param.Dnet <- as.numeric(param$val[(length(pumping.annual)+3):(2*length(pumping.annual)+2)])
+    dt.out.param <- data.frame(Year = out.budget.annual$Year, rf = param.rf, Dnet= param.Dnet)
+
+    
+    openxlsx::saveWorkbook(wb, file.path(dir.input,in.fileName),overwrite = TRUE)
+  }
+  
+}
+
+write.csv(gof_grid,paste0(dir.input,"/gof_grid.csv"))
+
