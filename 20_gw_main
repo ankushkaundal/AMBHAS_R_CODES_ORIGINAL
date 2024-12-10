@@ -1,0 +1,83 @@
+########################################################
+# /* Copyright (C) SatYukt Analytics Pvt Ltd. - All Rights Reserved
+# /* author : Sat Kumar Tomer; email : sat@satyukt.com
+########################################################
+run_gw_1d <- function(data,par,par.ini,par.limit.low,par.limit.up){
+  
+  L <<- nrow(data)
+
+  # Convert all the data to same units from millimeter to metres
+  rain <<- data$rainfall/1000
+
+  gwl.obs <<- data$Observed_GWL
+  ## <<- global variables
+  piezo.obs <<- ele - gwl.obs
+  hini <<- piezo.obs[1]
+
+  # initial guess
+  st0 <-  unlist(par.ini)
+  
+  optx <- optimx(par=st0,fn=sse, lower= unlist(par.limit.low), upper=unlist(par.limit.up),method= "nlminb",control=list(save.failures=TRUE, maxit=10000,trace=0))
+  #print("see optx")
+  #print(optx)
+  return(optx)
+  
+}
+
+
+sse <- function(par){
+  
+  idx.r <- grep("*rf", names(par))
+  idx.pd <- grep("pd", names(par))
+  idx.sy <- grep("sy", names(par))
+  idx.Dnet <- grep("Dnet", names(par))
+
+  
+  rf <- par[idx.r]
+  rf <- if (length(rf)==1) rf else rep(rf,each=12,length.out = length(rain))
+  #print("CHECK RF NOW")
+  #print(rf)
+  par.pd <- par[idx.pd]
+  sy <- par[idx.sy]
+  # sy <- if (length(sy)==1) sy else rep(sy,each=12,length.out = length(rain))
+  Dnet <- par[idx.Dnet]
+  
+  Dnet <- if (length(Dnet)==1) Dnet else rep(Dnet,each=12,length.out = length(rain))
+  
+  #print("Hello, world!")  # Prints a simple string message
+  
+  #print(paste("rf:", rf))
+  #print(paste("pd:", par.pd))
+  #print(paste("sy:", sy))
+  #print(paste("Dnet:", Dnet))
+  recharge <- rf*rain
+  net_recharge <- recharge - Dnet
+  h <- numeric(L+1)
+  h[1] <- piezo.obs[1]
+  Q <- numeric(L)
+
+  for(k in 1:L){
+    out <- update_vertically(h[k],sy,net_recharge[k],par.pd,hmin)
+    h[k+1] <- out$h
+    Q[k] <- out$BF
+    
+  }
+  
+
+  gwl.sim <- ele - h
+  
+  piezo.sim <- h[1:length(piezo.obs)]
+  
+  
+  out.sim <<- data.frame(obs = gwl.obs,sim = gwl.sim[1:length(piezo.obs)], recharge = recharge, discharge = Q)
+  
+  # Calculate the residual sum of squares    
+  sse <- sum((piezo.obs - piezo.sim)^2,na.rm=TRUE)
+  #print(sse)
+  
+}
+
+
+# par1 <- c(rf = rep(0.1,10),pd= 0.0001,sy = 0.0025,Dnet = 0)
+# sse1(par1)
+
