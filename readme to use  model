@@ -1,0 +1,3 @@
+10_gw_util and 20_gw_main r code files should be in same folder as run_ambhas1d_d2-Copy
+
+run_ambhas1d_d2-Copy is copy of original run_ambhas1d_d2 file from shubham , just it is changed to give freedom to Dnet to change. In original code Dnet was constant
